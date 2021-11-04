@@ -4022,5 +4022,77 @@ show table status like 'table_name'\G #查看某个表的统计信息
 
 
 
+## Extra
 
+​		`Extra`列是用来说明一些额外信息的，可以通过这些额外信息来更准确的理解`MySQL`到底将如何执行给定的查询语句。
+
+​		`No tables used`：当查询语句的没有`FROM`子句时将会提示该额外信息。
+
+​		`Impossible WHERE`：查询语句的`WHERE`子句永远为`FALSE`时将会提示该额外信息。
+
+​		`No matching min/max row`：当查询列表处有`MIN`或者`MAX`聚集函数，但是并没有符合`WHERE`子句中的搜索条件的记录时，将会提示该额外信息。
+
+​		`Using index`：当查询列表以及搜索条件中只包含属于某个索引的列，也就是在可以使用索引覆盖的情况下，在`Extra`列将会提示该额外信息。
+
+​		`Using index condition`：有些搜索条件中虽然出现了索引列，但却不能使用到索引，但依然先使用索引筛选出一部分数据后，先不回表，而是用索引列进行
+
+后序的判断，把这个改进称之为 索引条件下推。在`Extra`列中将会显示`Using index condition`。
+
+​		`Using where`：当使用全表扫描来执行对某个表的查询，并且该语句的`WHERE`子句中有针对该表的搜索条件时，在`Extra`列中会提示上述额外信息。当使用索
+
+引访问来执行对某个表的查询，并且该语句的`WHERE`子句中有除了该索引包含的列之外的其他搜索条件时，在`Extra`列中也会提示上述额外信息。
+
+​		`Using join buffer(Block Nested Loop)`：在连接查询执行过程中，当被驱动表不能有效的利用索引加快访问速度，`MySQL`一般会为其分配一块名叫`join `
+
+`buffe`的内存块来加快查询速度，也就是基于块的嵌套循环算法。
+
+​		`Not exists`：当我们使用左`(`外`)`连接时，如果`WHERE`句中包含要求被驱动表的某个列等于`NULL`值的搜索条件，而且那个列又是不允许存储`NULL`值的，那
+
+么在该表的执行计划的`Extra`列就会提示`Not exists`额外信息。
+
+​		`Using intersect(...)、Using union(...)`和`Using sort_union(...)`：如果执行计划的`Extra`列出现了`Using intersect(...)`提示，说明准备使用
+
+`Intersect `索引合并的方式执行查询，括号中的`...`表示需要进行索引合并的索引名称；如果出现了`Using union(...)`提示，说明准备使用`Union`索引合并的方
+
+式执行查询；出现了`Using sort_union(...)`提示，说明准备使用`Sort-Union`索引合并的方式执行查询。
+
+​		`Zero limit`：当我们的`LIMIT`子句的参数为`0`时，表示压根儿不打算从表中读出任何记录，将会提示该额外信息。
+
+​		`Using filesort`：有一些情况下对结果集中的记录进行排序是可以使用到索引的，但是很多情况下排序操作无法使用到索引，只能在内存中`(`记录较少的时
+
+候`)`或者磁盘中`(`记录较多的时候`)`进行排序，`MySQL`把这种在内存中或者磁盘上进行排序的方式统称为文件排序。如果某个查询需要使用文件排序的方式执行
+
+查询，就会在执行计划的`Extra`列中显示`Using filesort`提示。
+
+​		`Using temporary`：在许多查询的执行过程中，`MySQL`可能会借助临时表来完成一些功能，比如去重、排序之类的，比如在执行许多包含`DISTINCT、`
+
+ `GROUP BY、UNION`等子句的查询过程中，如果不能有效利用索引来完成查询，`MySQL`很有可能寻求通过建立内部的临时表来执行查询。如果查询中使用到了内部的
+
+临时表，在执行计划的`Extra`列将会显示`Using temporary`提示。
+
+​		`Start temporary,End temporary`：查询优化器会优先尝试将`IN`子查询转换成半连接，而半连接又有好多种执行策略，当执行策略为`DuplicateWeedout`时，
+
+也就是通过建立临时表来实现为外层查询中的记录进行去重操作时，驱动表查询执行计划的`Extra`列将显示`Start temporary`提示，被驱动表查询执行计划的
+
+`Extra`列将显示`End temporary`提示。
+
+​		`LooseScan`：在将`In`子查询转为半连接时，如果采用的是`LooseScan`执行策略，则在驱动表执行计划的`Extra`列就是显示`LooseScan`提示。
+
+​		`FirstMatch(tbl_name)`：在将`In`子查询转为半连接时，如果采用的是`FirstMatch`执行策略，则在被驱动表执行计划的`Extra`列就是显示
+
+`FirstMatch(tbl_name)`提示。
+
+
+
+
+
+## Json格式的执行计划
+
+​		在`EXPLAIN`单词和真正的查询语句中间加上`FORMAT=JSON`可以查看某个执行计划花费的成本。
+
+
+
+## Extented EXPLAIN
+
+​		使用`EXPLAIN`语句查看了某个查询的执行计划后，紧接着还可以使用`SHOW WARNINGS`语句查看与这个查询的执行计划有关的一些扩展信息。
 
