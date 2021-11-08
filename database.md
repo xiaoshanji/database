@@ -4096,3 +4096,20 @@ show table status like 'table_name'\G #查看某个表的统计信息
 
 ​		使用`EXPLAIN`语句查看了某个查询的执行计划后，紧接着还可以使用`SHOW WARNINGS`语句查看与这个查询的执行计划有关的一些扩展信息。
 
+
+
+# optimizer trace表
+
+​		在`MySQL 5.6`以及之后的版本中，MySQL 提出了一个`optimizer trace`的功 能，这个功能可以让我们方便的查看优化器生成执行计划的整个过程，这个功能
+
+的开启与关闭由系统变量`optimizer_trace`决定。当该查询语句执行完成后，就可以到`information_schema`数据库下的`OPTIMIZER_TRACE`表中查看完整的优化过
+
+程。
+
+|               列名                |                             描述                             |
+| :-------------------------------: | :----------------------------------------------------------: |
+|               QUERY               |                      表示我们的查询语句                      |
+|               TRACE               |                  表示优化过程的JSON格式文本                  |
+| MISSING_BYTES_BEYOND_MAX_MEM_SIZE | 由于优化过程可能会输出很多，如果超过某个限制时，多余的文本 将不会被显示，这个字段展示了被忽略的文本字节数 |
+|      INSUFFICIENT_PRIVILEGES      | 表示是否没有权限查看优化过程，默认值是0，只有某些特殊情况下才会是 1 |
+
