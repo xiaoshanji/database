@@ -4720,6 +4720,240 @@ RELEASE SAVEPOINT 保存点名称; #删除某个保存点
 
 
 
+​		在写入撤销日志的过程中会使用到多个链表，很多链表都有同样的节点结构：
+
+![](image/QQ截图20211124201112.png)
+
+​		为了更好的管理链表，`InnoDB`还提出了一个基节点的结构，里边存储了这个链表的头节点 、 尾节点以及链表长度信息：
+
+![](image/QQ截图20211124201234.png)
+
+​		使用`List Base Node`和`List Node`这两个结构组成的链表的示意图：
+
+![](image/QQ截图20211124201355.png)
+
+
+
+​		有一种称之为`FIL_PAGE_UNDO_LOG`类型的页面是专门用来存储撤销日志的：
+
+![](image/QQ截图20211124201512.png)
+
+​		`File Header`和`File Trailer`是各种页面都有的通用结构，`Undo Page Header`是`FIL_PAGE_UNDO_LOG`页面所特有的：
+
+![](image/QQ截图20211124201641.png)
+
+​		`TRX_UNDO_PAGE_TYPE`：本页面准备存储什么种类的撤销日志，它们可以被分为两个大类：
+
+​				`TRX_UNDO_INSERT(`使用十进制`1`表示`)`：类型为`TRX_UNDO_INSERT_REC`的撤销日志属于此大类，一般由`INSERT`语句产生，或者在`UPDATE`语句中有更新
+
+​		主键的情况也会产生此类型的撤销日志。
+
+​				`TRX_UNDO_UPDATE(`使用十进制`2`表示`)`，除了类型为`TRX_UNDO_INSERT_REC`的撤销日志 ，其他类型的撤销日志都属于这个大类，一般由`DELETE、`
+
+​		`UPDATE`语句产生的撤销日志属于这个大类。
+
+​		`TRX_UNDO_PAGE_START`：表示在当前页面中是从什么位置开始存储撤销日志的，或者说表示第一条撤销日志在本页面中的起始偏移量。
+
+​		`TRX_UNDO_PAGE_FREE`：与`TRX_UNDO_PAGE_START`对应，表示当前页面中存储的最后一条撤销日志结束时的偏移量，或者说从这个位置开始，可以继续写入新
+
+的撤销日志 。
+
+​		`TRX_UNDO_PAGE_NODE`：代表一个`List Node`结构。
+
+​		因为一个事务可能包含多个语句，而且一个语句可能对若干条记录进行改动，而对每条记录进行改动前，都可能需要记录多条撤销日志 ，所以在一个事务执
+
+行过程中可能产生很多撤销日志 ，这些日志可能一个页面放不下，需要放到多个页面中，这些页面就通过`TRX_UNDO_PAGE_NODE`属性连成了链表：
+
+![](image/QQ截图20211124202601.png)
+
+​		而同一个`FIL_PAGE_UNDO_LOG`页面要么只存储`TRX_UNDO_INSERT`大类的撤销日志，要么只存储`TRX_UNDO_UPDATE`大类的撤销日志，所以在一个事务执行过程中
+
+就可能需要`2`个 `FIL_PAGE_UNDO_LOG`页面的链表，一个称之为`insert undo`链表 ，另一个称之为`update undo`链表。
+
+![](image/QQ截图20211124202857.png)
+
+​		另外，`InnoDB`规定对普通表和临时表的记录改动时产生的撤销日志要分别记录，所以在一个事务中最多有`4`个以`FIL_PAGE_UNDO_LOG`页面为节点组成的链表：
+
+![](image/QQ截图20211124202953.png)
+
+​		当然，并不是在事务一开始就会为这个事务分配这`4`个链表：
+
+​				刚刚开启事务时，一个 `FIL_PAGE_UNDO_LOG`页面链表也不分配。
+
+​				当事务执行过程中向普通表中插入记录或者执行更新记录主键的操作之后，就会为其分配一个普通表的`insert undo`链表。
+
+​				当事务执行过程中删除或者更新了普通表中的记录之后，就会为其分配一个普通表的`update undo`链表。
+
+​				当事务执行过程中向临时表中插入记录或者执行更新记录主键的操作之后，就会为其分配一个临时表的`insert undo`链表。
+
+​				当事务执行过程中删除或者更新了临时表中的记录之后，就会为其分配一个临时表的`update undo`链表。
+
+​		并且不同事务执行过程中产生的撤销日志需要被写入到不同的`FIL_PAGE_UNDO_LOG`页面链表中。
+
+
+
+​		`InnoDB`规定，每一个`FIL_PAGE_UNDO_LOG`页面链表都对应着一个段，称之为`Undo Log Segment`。也就是说链表中的页面都是从这个段里边申请的，所以在页
+
+`FIL_PAGE_UNDO_LOG`页面链表的第一个页面中设计了一个称之为`Undo Log Segment Header`的部分，这个部分中包含了该链表对应的段的`segment header`信息以及
+
+其他的一些关于这个段的信息：
+
+![](image/QQ截图20211124203700.png)
+
+![](image/QQ截图20211124203719.png)
+
+​		`TRX_UNDO_STATE`：本`FIL_PAGE_UNDO_LOG`页面链表处在什么状态：
+
+​				`TRX_UNDO_ACTIVE`：活跃状态，也就是一个活跃的事务正在往这个段里边写入撤销日志。
+
+​				`TRX_UNDO_CACHED`：被缓存的状态。处在该状态的`FIL_PAGE_UNDO_LOG`页面链表等待着之后被其他事务重用。
+
+​				`TRX_UNDO_TO_FREE`：对于`insert undo`链表来说，如果在它对应的事务提交之后，该链表不能被重用，那么就会处于这种状态。 
+
+​				`TRX_UNDO_TO_PURGE`：对于`update undo`链表来说，如果在它对应的事务提交之后，该链表不能被重用，那么就会处于这种状态。 
+
+​				`TRX_UNDO_PREPARED`：包含处于`PREPARE`阶段的事务产生的撤销日志。
+
+​		`TRX_UNDO_LAST_LOG`：本`FIL_PAGE_UNDO_LOG`页面链表中最后一个`Undo Log Header`的位置。
+
+​		`TRX_UNDO_FSEG_HEADER`：本`FIL_PAGE_UNDO_LOG`页面链表对应的段的`Segment Header`信息。
+
+​		`TRX_UNDO_PAGE_LIST`：`FIL_PAGE_UNDO_LOG`页面链表的基节点。
+
+​		`FIL_PAGE_UNDO_LOG`页面的`Undo Page Header`部分有一个`12`字节大小的`TRX_UNDO_PAGE_NODE`属性，这个属性代表一个`List Node`结构。每一个
+
+`FIL_PAGE_UNDO_LOG`页面都包含`Undo Page Header`结构，这些页面就可以通过这个属性连成一个链表。这个`TRX_UNDO_PAGE_LIST`属性代表着这个链表的基节点，
+
+当然这个基节点只存在于`FIL_PAGE_UNDO_LOG`页面链表的第一个页面，也就是`first undo page`中。
+
+​		`InnoDB`认为同一个事务向一个`FIL_PAGE_UNDO_LOG`页面链表中写入的撤销日志算是一个组。在每写入一组撤销日志时，都会在这组撤销日志前先记录一下关
+
+于这个组的一些属性，`InnoDB`把存储这些属性的地方称之为`Undo Log Header`。所以`FIL_PAGE_UNDO_LOG`页面链表的第一个页面在真正写入撤销日志前，其实都会
+
+被填充`Undo Page Header、Undo Log Segment Header、Undo Log Header`这`3`个部分：
+
+![](image/QQ截图20211124204914.png)
+
+![](image/QQ截图20211124204945.png)
+
+​		`TRX_UNDO_TRX_ID`：生成本组撤销日志的事务`id`。
+
+​		`TRX_UNDO_TRX_NO`：事务提交后生成的一个需要序号，使用此序号来标记事务的提交顺序`(`先提交的此序号小，后提交的此序号大`)`。
+
+​		`TRX_UNDO_DEL_MARKS`：标记本组撤销日志中是否包含由于`Delete mark`操作产生的撤销日志。
+
+​		`TRX_UNDO_LOG_START`：表示本组撤销日志中第一条撤销日志的在页面中的偏移量。
+
+​		`TRX_UNDO_XID_EXISTS`：本组撤销日志是否包含`XID`信息。
+
+​		`TRX_UNDO_DICT_TRANS`：标记本组撤销日志是不是由`DDL`语句产生的。
+
+​		`TRX_UNDO_TABLE_ID`：如果`TRX_UNDO_DICT_TRANS`为真，那么本属性表示`DDL`语句操作的表的`table id`。
+
+​		`TRX_UNDO_NEXT_LOG`：下一组的撤销日志在页面中开始的偏移量。
+
+​		`TRX_UNDO_PREV_LOG`：上一组的撤销日志在页面中开始的偏移量。
+
+​		`TRX_UNDO_HISTORY_NODE`：一个`12`字节的`List Node`结构，代表一个称之为`History`链表的节点。
+
+​		对于没有被重用的`FIL_PAGE_UNDO_LOG`页面链表来说，链表的第一个页面，也就是`first undo page`在真正写入撤销日志前，会填充`Undo Page Header、Undo `
+
+`Log Segment Header、Undo Log Header`这3个部分，之后才开始正式写入撤销日志 。对于其他的页面来说，也就是`normal undo page`在真正写入撤销日志前，只
+
+会填充`Undo Page Header`。链表的`List Base Node`存放到`first undo page`的`Undo Log Segment Header`部分，`List Node`信息存放到每一个
+
+`FIL_PAGE_UNDO_LOG`页面的`undo Page Header`部分：
+
+![](image/QQ截图20211124205545.png)
+
+
+
+​		在事务提交后在某些情况下可以重用该事务的`FIL_PAGE_UNDO_LOG`页面链表。一个`FIL_PAGE_UNDO_LOG`页面链表是否可以被重用的条件很简单：
+
+​				该链表中只包含一个`FIL_PAGE_UNDO_LOG`页面 。
+
+​				该`FIL_PAGE_UNDO_LOG`页面已经使用的空间小于整个页面空间的`3/4`。
+
+​						`insert undo`链表：其只存储类型为`TRX_UNDO_INSERT_REC`的撤销日志 ，这种类型的撤销日志在事务提交之后就没用了，就可以被清除掉。所以在
+
+​				某个事务提交后，重用这个事务的`insert undo`链表`(`这个链表中只有一个页面`)`时，可以直接把之前事务写入的一组撤销日志覆盖掉，从头开始写入
+
+​				新事务的一组撤销日志。
+
+​						`update undo`链表：在一个事务提交后，它的`update undo`链表中的撤销日志也不能立即删除掉。所以如果之后的事务想重用`update undo`链表
+
+​				时，就不能覆盖之前事务写入的撤销日志 。 这样就相当于在同一个`FIL_PAGE_UNDO_LOG`页中写入了多组的撤销日志。
+
+
+
+​		在同一时刻系统里其实可以有许许多多个`FIL_PAGE_UNDO_LOG`页面链表存在。为了更好的管理这些链表，`InnoDB`设计了一个称之为`Rollback Segment Header`
+
+的页面，在这个页面中存放了各个`FIL_PAGE_UNDO_LOG`页面链表的`frist undo page`的页号，把这些页号称之为`undo slot`。
+
+![](image/QQ截图20211124210522.png)
+
+​		`InnoDB`规定，每一个`Rollback Segment Header`页面都对应着一个段，这个段就称为`Rollback Segment`，翻译过来就是回滚段。
+
+​		`TRX_RSEG_MAX_SIZE`：本`Rollback Segment`中管理的所有`FIL_PAGE_UNDO_LOG`页面链表中的`FIL_PAGE_UNDO_LOG`页面数量之和的最大值。
+
+​		`TRX_RSEG_HISTORY_SIZE`：`History`链表占用的页面数量。
+
+​		`TRX_RSEG_HISTORY`：`History`链表的基节点。
+
+​		`TRX_RSEG_FSEG_HEADER`：本`Rollback Segment`对应的`10`字节大小的`Segment Header`结构，通过它可以找到本段对应的`INODE Entry`。
+
+​		`TRX_RSEG_UNDO_SLOTS`：各个`FIL_PAGE_UNDO_LOG`页面链表的`first undo page`的页号集合，也就是`undo slot`集合。
+
+​		初始情况下，由于未向任何事务分配任何`FIL_PAGE_UNDO_LOG`页面链表，所以对于一个`Rollback Segment Header`页面来说， 它的各个`undo slot`都被设置成
+
+了一个特殊的值：`FIL_NULL`，表示该`undo slot`不指向任何页面。
+
+​		有事务需要分配`FIL_PAGE_UNDO_LOG`页面 链表了，就从回滚段的第一个`undo slot`开始，看看该`undo slot`的值是不是`FIL_NULL`：
+
+​				如果是`FIL_NULL`，那么在表空间中新创建一个段`(`也就是`Undo Log Segment)`，然后从段里申请一个页面作为`FIL_PAGE_UNDO_LOG`页面链表的`first `
+
+​		`undo page`，然后把该`undo slot`的值设置为刚刚申请的这个页面的地址，这样也就意味着这个`undo slot`被分配给了这个事务。
+
+​				如果不是`FIL_NULL`，说明该`undo slot`已经指向了一个`undo`链表 ，也就是说这个`undo slot`已经被别的事务占用了，那就跳到下一个`undo slot`，判
+
+​		断该`undo slot`的值是不是`FIL_NULL`。
+
+​		一个`Rollback Segment Header`页面中包含`1024`个`undo slot`，如果这`1024`个`undo slot`的值都不为`FIL_NULL`，这就意味着这`1024`个`undo slot`都已经被
+
+分配给了某个事务，此时由于新事务无法再获得新的`FIL_PAGE_UNDO_LOG`页面链表，就会回滚这个事务并且给用户报错。
+
+​		当一个事务提交时，它所占用的`undo slot`有两种命运：
+
+​				如果该`undo slot`指向的`FIL_PAGE_UNDO_LOG`页面链表符合被重用的条件。该`undo slot`就处于被缓存的状态，`InnoDB`规定这时该`FIL_PAGE_UNDO_LOG`
+
+​		页面链表的`TRX_UNDO_STATE`属性`(`该属性在`first undo page`的`Undo Log Segment Header `部分`)`会被设置为`TRX_UNDO_CACHED`。 被缓存的`undo slot`都会
+
+​		被加入到一个链表，根据对应的`FIL_PAGE_UNDO_LOG`页面链表的类型不同，也会被加入到不同的链表：
+
+​						如果对应的`FIL_PAGE_UNDO_LOG`页面链表是`insert undo`链表 ，则该`undo slot`会被加入`insert undo cached`链表。
+
+​						如果对应的`FIL_PAGE_UNDO_LOG`页面链表是`update undo`链表 ，则该`undo slot`会被加入`update undo cached`链表。
+
+​						一个回滚段就对应着上述两个`cached`链表 ，如果有新事务要分配`undo slot`时，先从对应的`cached`链表中找。如果没有被缓存的`undo slot`，才
+
+​				会到回滚段的`Rollback Segment Header`页面中再去找。
+
+​				如果该`undo slot`指向的`FIL_PAGE_UNDO_LOG`页面链表不符合被重用的条件，那么针对该`undo slot`对应的`FIL_PAGE_UNDO_LOG`页面链表类型不同，也会
+
+​		有不同的处理：
+
+​						如果对应的`FIL_PAGE_UNDO_LOG`页面链表是`insert undo`链表 ，则该`FIL_PAGE_UNDO_LOG`页面链表的`TRX_UNDO_STATE`属性会被设置为
+
+​				`TRX_UNDO_TO_FREE`，之后该`FIL_PAGE_UNDO_LOG`页面链表对应的段会被释放掉`(`也就意味着段中的页面可以被挪作他用`)`，然后把该`undo slot`的值设
+
+​				置为`FIL_NULL`。
+
+​						如果对应的`FIL_PAGE_UNDO_LOG`页面链表是`update undo`链表 ，则该`FIL_PAGE_UNDO_LOG`页面链表的`TRX_UNDO_STATE`属性会被设置为
+
+​				`TRX_UNDO_TO_PRUGE`，则会将该`undo slot`的值设置为`FIL_NULL`，然后将本次事务写入的一组撤销日志放到所谓的`History`链表中`(`要注意的是，这里
+
+​				并不会将`FIL_PAGE_UNDO_LOG`页面链表对应的段给释放掉`)`。
+
 
 
 
